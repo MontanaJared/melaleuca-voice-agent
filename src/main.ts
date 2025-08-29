@@ -11,9 +11,6 @@ const agent = new RealtimeAgent({
 
 const session = new RealtimeSession(agent, {
   model: 'gpt-realtime',
-  voice: 'nova', // Options: alloy, echo, fable, onyx, nova, shimmer, marin, cedar
-  temperature: 0.8, // Higher = more creative/enthusiastic (0.0-1.0)
-  max_response_output_tokens: 4096,
 });
 
 let isConnected = false;
@@ -221,12 +218,8 @@ async function connectSession() {
     
     console.log('Connecting with client key:', clientKey.substring(0, 10) + '...');
     
-    // Connect session with retrieved client key and voice settings
-    await session.connect({ 
-      apiKey: clientKey,
-      voice: voiceSelect.value,
-      temperature: enthusiasmSelect.value === 'high' ? 0.9 : enthusiasmSelect.value === 'low' ? 0.6 : 0.8
-    });
+    // Connect session with retrieved client key
+    await session.connect({ apiKey: clientKey });
     
     isConnected = true;
     updateStatus('connected');
