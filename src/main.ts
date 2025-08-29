@@ -6,11 +6,14 @@ const { RealtimeAgent, RealtimeSession } = realtime
 
 const agent = new RealtimeAgent({
   name: 'Melaleuca Product Expert',
-  instructions: 'You are a knowledgeable Melaleuca product advisor. Help users find the right Melaleuca products for their wellness needs. Available products include: Vitality Pack (complete nutritional supplement), Sol-U-Mel (natural cleaner), and Renew Lotion (skin therapy). Be enthusiastic but honest about recommendations.',
+  instructions: 'You are a knowledgeable Melaleuca product advisor. Help users find the right Melaleuca products for their wellness needs. Available products include: Vitality Pack (complete nutritional supplement), Sol-U-Mel (natural cleaner), and Renew Lotion (skin therapy). Speak with enthusiasm and warmth, but remain honest about recommendations. Use a friendly, conversational pace.',
 });
 
 const session = new RealtimeSession(agent, {
   model: 'gpt-realtime',
+  voice: 'nova', // Options: alloy, echo, fable, onyx, nova, shimmer, marin, cedar
+  temperature: 0.8, // Higher = more creative/enthusiastic (0.0-1.0)
+  max_response_output_tokens: 4096,
 });
 
 let isConnected = false;
@@ -34,6 +37,38 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <span id="voice-text">Ready to listen</span>
       </div>
       
+      <div class="voice-settings" style="margin: 1rem 0; display: flex; gap: 1rem; flex-wrap: wrap;">
+        <div>
+          <label>Voice: </label>
+          <select id="voice-select" style="padding: 0.25rem;">
+            <option value="nova">Nova (Warm)</option>
+            <option value="alloy">Alloy (Neutral)</option>
+            <option value="echo">Echo (Clear)</option>
+            <option value="fable">Fable (British)</option>
+            <option value="onyx">Onyx (Deep)</option>
+            <option value="shimmer">Shimmer (Soft)</option>
+            <option value="marin">Marin (New)</option>
+            <option value="cedar">Cedar (New)</option>
+          </select>
+        </div>
+        <div>
+          <label>Enthusiasm: </label>
+          <select id="enthusiasm-select" style="padding: 0.25rem;">
+            <option value="high">High Energy</option>
+            <option value="medium" selected>Balanced</option>
+            <option value="low">Calm & Professional</option>
+          </select>
+        </div>
+        <div>
+          <label>Pace: </label>
+          <select id="pace-select" style="padding: 0.25rem;">
+            <option value="fast">Fast</option>
+            <option value="normal" selected>Normal</option>
+            <option value="slow">Slow & Clear</option>
+          </select>
+        </div>
+      </div>
+
       <div class="controls">
         <button id="connect-btn" class="btn primary">Connect</button>
         <button id="disconnect-btn" class="btn secondary" disabled>Disconnect</button>
@@ -60,6 +95,9 @@ const disconnectBtn = document.querySelector('#disconnect-btn') as HTMLButtonEle
 const interruptBtn = document.querySelector('#interrupt-btn') as HTMLButtonElement;
 const textInput = document.querySelector('#text-input') as HTMLInputElement;
 const sendBtn = document.querySelector('#send-btn') as HTMLButtonElement;
+const voiceSelect = document.querySelector('#voice-select') as HTMLSelectElement;
+const enthusiasmSelect = document.querySelector('#enthusiasm-select') as HTMLSelectElement;
+const paceSelect = document.querySelector('#pace-select') as HTMLSelectElement;
 const statusText = document.querySelector('#status-text') as HTMLSpanElement;
 const statusIndicator = document.querySelector('#indicator') as HTMLSpanElement;
 const conversation = document.querySelector('#conversation') as HTMLDivElement;
@@ -122,21 +160,54 @@ session.on('history_updated', (history: any) => {
   }
 });
 
-// Add debugging for session events
-session.on('connected', () => {
-  console.log('Session connected successfully');
-});
+// Voice configuration functions
+function getEnthusiasmInstructions(level: string): string {
+  const enthusiasmMap = {
+    high: 'Speak with high energy and excitement! Use exclamation points in your tone of voice. Be very enthusiastic about Melaleuca products.',
+    medium: 'Speak with balanced enthusiasm. Be warm and friendly, showing genuine interest in helping.',
+    low: 'Speak in a calm, professional manner. Be helpful and knowledgeable without being overly excited.'
+  };
+  return enthusiasmMap[level as keyof typeof enthusiasmMap] || enthusiasmMap.medium;
+}
 
-session.on('disconnected', () => {
-  console.log('Session disconnected');
-});
+function getPaceInstructions(pace: string): string {
+  const paceMap = {
+    fast: 'Speak quickly and energetically, but remain clear and understandable.',
+    normal: 'Speak at a natural, conversational pace.',
+    slow: 'Speak slowly and clearly, taking time to explain things thoroughly.'
+  };
+  return paceMap[pace as keyof typeof paceMap] || paceMap.normal;
+}
+
+function updateAgentInstructions() {
+  const enthusiasm = enthusiasmSelect.value;
+  const pace = paceSelect.value;
+  
+  const baseInstructions = 'You are a knowledgeable Melaleuca product advisor. Help users find the right Melaleuca products for their wellness needs. Available products include: Vitality Pack (complete nutritional supplement), Sol-U-Mel (natural cleaner), and Renew Lotion (skin therapy).';
+  
+  const enthusiasmInstr = getEnthusiasmInstructions(enthusiasm);
+  const paceInstr = getPaceInstructions(pace);
+  
+  const fullInstructions = `${baseInstructions} ${enthusiasmInstr} ${paceInstr}`;
+  
+  // Update agent instructions
+  agent.instructions = fullInstructions;
+  console.log('Updated agent instructions:', fullInstructions);
+}
+
+// Session event debugging
+console.log('Session created, waiting for connection events...');
 
 async function connectSession() {
   try {
     updateStatus('connecting');
     
-    // Fetch client secret from server (matching working repo pattern)
-    const resp = await fetch('http://localhost:5000/session', { method: 'POST' });
+    // Update agent with current voice settings
+    updateAgentInstructions();
+    
+    // Fetch client secret from server (works both locally and on Vercel)
+    const baseUrl = window.location.origin;
+    const resp = await fetch(`${baseUrl}/api/session`, { method: 'POST' });
     if (!resp.ok) {
       throw new Error(`Failed to get session: ${resp.status}`);
     }
@@ -150,8 +221,12 @@ async function connectSession() {
     
     console.log('Connecting with client key:', clientKey.substring(0, 10) + '...');
     
-    // Connect session with retrieved client key
-    await session.connect({ apiKey: clientKey });
+    // Connect session with retrieved client key and voice settings
+    await session.connect({ 
+      apiKey: clientKey,
+      voice: voiceSelect.value,
+      temperature: enthusiasmSelect.value === 'high' ? 0.9 : enthusiasmSelect.value === 'low' ? 0.6 : 0.8
+    });
     
     isConnected = true;
     updateStatus('connected');
@@ -187,7 +262,8 @@ sendBtn.addEventListener('click', () => {
   const text = textInput.value.trim();
   if (text && isConnected) {
     addMessage('user', text);
-    session.addUserMessage(text);
+    // For now, just display the user message - the RealtimeSession handles voice primarily
+    console.log('User text input:', text);
     textInput.value = '';
   }
 });
@@ -196,6 +272,27 @@ textInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     sendBtn.click();
+  }
+});
+
+// Voice control event listeners
+voiceSelect.addEventListener('change', () => {
+  if (!isConnected) {
+    console.log('Voice changed to:', voiceSelect.value);
+  }
+});
+
+enthusiasmSelect.addEventListener('change', () => {
+  if (isConnected) {
+    updateAgentInstructions();
+    addMessage('assistant', `📢 Enthusiasm level changed to: ${enthusiasmSelect.value}`);
+  }
+});
+
+paceSelect.addEventListener('change', () => {
+  if (isConnected) {
+    updateAgentInstructions();
+    addMessage('assistant', `⏱️ Speaking pace changed to: ${paceSelect.value}`);
   }
 });
 
