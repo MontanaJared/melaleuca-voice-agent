@@ -1,164 +1,21 @@
 import './style.css'
-import { RealtimeAgent, RealtimeSession } from '@openai/agents/realtime';
-import { z } from 'zod';
+import { realtime } from '@openai/agents'
+const { RealtimeAgent, RealtimeSession } = realtime
 
-interface Product {
-  name: string;
-  description: string;
-  category: string;
-  price?: string;
-  benefits: string[];
-  url?: string;
-}
 
-const melaleucaProducts: Product[] = [
-  {
-    name: "Vitality Pack",
-    description: "Complete nutritional supplement system",
-    category: "Supplements",
-    benefits: ["Complete nutrition", "Immune support", "Energy boost"],
-    url: "https://melaleuca.com/products/vitality-pack"
-  },
-  {
-    name: "Sol-U-Mel",
-    description: "Natural disinfectant and cleaner",
-    category: "Cleaning",
-    benefits: ["Chemical-free cleaning", "Safe for families", "Multiple uses"],
-    url: "https://melaleuca.com/products/sol-u-mel"
-  },
-  {
-    name: "Renew Lotion",
-    description: "Intensive skin therapy lotion",
-    category: "Personal Care",
-    benefits: ["Deep moisturization", "Skin repair", "Natural ingredients"],
-    url: "https://melaleuca.com/products/renew-lotion"
-  }
-];
 
-const productSearchTool = {
-  type: 'function' as const,
-  name: 'search_melaleuca_products',
-  description: 'Search and recommend Melaleuca products based on user needs',
-  parameters: z.object({
-    query: z.string().describe('Search query for products'),
-    category: z.string().optional().describe('Product category filter')
-  }),
-  handler: ({ query, category }: { query: string; category?: string }) => {
-    const filtered = melaleucaProducts.filter(product => {
-      const matchesQuery = product.name.toLowerCase().includes(query.toLowerCase()) ||
-                          product.description.toLowerCase().includes(query.toLowerCase()) ||
-                          product.benefits.some(benefit => benefit.toLowerCase().includes(query.toLowerCase()));
-      
-      const matchesCategory = !category || product.category.toLowerCase().includes(category.toLowerCase());
-      
-      return matchesQuery && matchesCategory;
-    });
+const agent = new RealtimeAgent({
+  name: 'Melaleuca Product Expert',
+  instructions: 'You are a knowledgeable Melaleuca product advisor. Help users find the right Melaleuca products for their wellness needs. Available products include: Vitality Pack (complete nutritional supplement), Sol-U-Mel (natural cleaner), and Renew Lotion (skin therapy). Be enthusiastic but honest about recommendations.',
+});
 
-    return {
-      products: filtered,
-      total: filtered.length
-    };
-  }
-};
+const session = new RealtimeSession(agent, {
+  model: 'gpt-realtime',
+});
 
-class MelaleucaVoiceAgent {
-  private agent: RealtimeAgent;
-  private session: RealtimeSession | null = null;
-  private isConnected = false;
+let isConnected = false;
 
-  constructor() {
-    this.agent = new RealtimeAgent({
-      name: 'Melaleuca Product Advisor',
-      instructions: `You are a knowledgeable Melaleuca product advisor. Help users find the right Melaleuca products for their needs.
-
-Key guidelines:
-- Listen carefully to what the user is looking for
-- Ask clarifying questions about their specific needs, health concerns, or preferences
-- Use the search_melaleuca_products tool to find relevant products
-- Provide detailed explanations of product benefits
-- Be enthusiastic but honest about product recommendations
-- If you don't find exact matches, suggest similar alternatives
-- Always mention that these are wellness products and not medical treatments
-
-Focus on understanding the user's lifestyle, health goals, and preferences to make personalized recommendations.`,
-      tools: [productSearchTool]
-    });
-  }
-
-  async connect() {
-    if (this.isConnected) return;
-
-    try {
-      console.log('Fetching ephemeral token...');
-      
-      const response = await fetch('http://localhost:5000/api/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to get ephemeral token: ${response.status}`);
-      }
-
-      const sessionData = await response.json();
-      console.log('Got ephemeral token, creating session...');
-      
-      this.session = new RealtimeSession(this.agent, {
-        model: 'gpt-4o-realtime-preview-2024-10-01',
-        transport: 'websocket'
-      });
-      
-      console.log('Connecting with ephemeral token...');
-      
-      await this.session.connect({
-        apiKey: sessionData.client_secret.value
-      });
-
-      // Add event listeners for voice activity
-      this.session.on('input_audio_buffer.speech_started', () => {
-        console.log('🎤 Speech started');
-        updateVoiceStatus('speaking');
-      });
-
-      this.session.on('input_audio_buffer.speech_stopped', () => {
-        console.log('🔇 Speech stopped');
-        updateVoiceStatus('processing');
-      });
-
-      this.session.on('response.audio.delta', () => {
-        console.log('🔊 AI responding');
-        updateVoiceStatus('responding');
-      });
-
-      this.session.on('response.done', () => {
-        console.log('✅ Response complete');
-        updateVoiceStatus('listening');
-      });
-      
-      this.isConnected = true;
-      console.log('Connected to Melaleuca Voice Agent');
-    } catch (error) {
-      console.error('Connection failed:', error);
-      throw error;
-    }
-  }
-
-  async disconnect() {
-    if (this.session && this.isConnected) {
-      await this.session.disconnect();
-      this.isConnected = false;
-      console.log('Disconnected from voice agent');
-    }
-  }
-
-  isSessionConnected() {
-    return this.isConnected;
-  }
-}
-
-// Initialize the app
-let voiceAgent: MelaleucaVoiceAgent;
-
+// Initialize app
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div class="container">
     <header>
@@ -180,6 +37,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div class="controls">
         <button id="connect-btn" class="btn primary">Connect</button>
         <button id="disconnect-btn" class="btn secondary" disabled>Disconnect</button>
+        <button id="interrupt-btn" class="btn secondary" disabled>Interrupt</button>
       </div>
       
       <div class="conversation" id="conversation">
@@ -194,23 +52,10 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
 // Get DOM elements
 const connectBtn = document.querySelector('#connect-btn') as HTMLButtonElement;
 const disconnectBtn = document.querySelector('#disconnect-btn') as HTMLButtonElement;
+const interruptBtn = document.querySelector('#interrupt-btn') as HTMLButtonElement;
 const statusText = document.querySelector('#status-text') as HTMLSpanElement;
 const statusIndicator = document.querySelector('#indicator') as HTMLSpanElement;
-const voiceText = document.querySelector('#voice-text') as HTMLSpanElement;
-const voiceIndicator = document.querySelector('#voice-indicator') as HTMLDivElement;
-
-function updateVoiceStatus(status: 'listening' | 'speaking' | 'processing' | 'responding') {
-  const statusMap = {
-    listening: { text: '👂 Listening for your voice...', class: 'listening' },
-    speaking: { text: '🎤 You are speaking', class: 'speaking' },
-    processing: { text: '🤔 Processing your request...', class: 'processing' },
-    responding: { text: '🔊 AI is responding', class: 'responding' }
-  };
-
-  const config = statusMap[status];
-  voiceText.textContent = config.text;
-  voiceIndicator.className = `voice-indicator ${config.class}`;
-}
+const conversation = document.querySelector('#conversation') as HTMLDivElement;
 
 function updateStatus(status: 'connected' | 'disconnected' | 'connecting') {
   const statusMap = {
@@ -225,33 +70,86 @@ function updateStatus(status: 'connected' | 'disconnected' | 'connecting') {
   
   connectBtn.disabled = status === 'connected' || status === 'connecting';
   disconnectBtn.disabled = status !== 'connected';
+  interruptBtn.disabled = status !== 'connected';
 }
 
-// Event listeners
-connectBtn.addEventListener('click', async () => {
+function addMessage(role: 'user' | 'assistant', content: string) {
+  const messageDiv = document.createElement('div');
+  messageDiv.className = `message ${role}`;
+  messageDiv.innerHTML = `<p>${content}</p>`;
+  conversation.appendChild(messageDiv);
+  conversation.scrollTop = conversation.scrollHeight;
+}
+
+// Session event handling
+session.on('history_updated', (history: any) => {
+  // Clear conversation except first message
+  const firstMessage = conversation.querySelector('.message.assistant');
+  conversation.innerHTML = '';
+  if (firstMessage) {
+    conversation.appendChild(firstMessage);
+  }
+  
+  // Add all messages from history
+  for (const item of history) {
+    if (item.type === 'message') {
+      addMessage(item.role, item.content?.[0]?.text || '');
+    }
+  }
+});
+
+async function connectSession() {
   try {
     updateStatus('connecting');
-    voiceAgent = new MelaleucaVoiceAgent();
-    await voiceAgent.connect();
+    
+    // Fetch client secret from server (matching working repo pattern)
+    const resp = await fetch('http://localhost:5000/session', { method: 'POST' });
+    if (!resp.ok) {
+      throw new Error(`Failed to get session: ${resp.status}`);
+    }
+    
+    const data = await resp.json();
+    const clientKey = data?.client_secret?.value;
+    
+    if (!clientKey) {
+      throw new Error('No client key received');
+    }
+    
+    console.log('Connecting with client key:', clientKey.substring(0, 10) + '...');
+    
+    // Connect session with retrieved client key
+    await session.connect({ apiKey: clientKey });
+    
+    isConnected = true;
     updateStatus('connected');
-    updateVoiceStatus('listening');
+    addMessage('assistant', '🎤 Ready! You can now speak or type your questions about Melaleuca products.');
+    
   } catch (error) {
     console.error('Connection failed:', error);
     updateStatus('disconnected');
-    alert('Connection failed. Please check the console for details.');
+    alert('Connection failed: ' + (error as Error).message);
   }
-});
+}
 
-disconnectBtn.addEventListener('click', async () => {
+async function disconnectSession() {
   try {
-    if (voiceAgent) {
-      await voiceAgent.disconnect();
-    }
+    // RealtimeSession doesn't have disconnect method, just reset state
+    isConnected = false;
     updateStatus('disconnected');
   } catch (error) {
-    console.error('Disconnection failed:', error);
+    console.error('Disconnect failed:', error);
+  }
+}
+
+// Event listeners
+connectBtn.addEventListener('click', connectSession);
+disconnectBtn.addEventListener('click', disconnectSession);
+interruptBtn.addEventListener('click', () => {
+  if (isConnected) {
+    session.interrupt();
   }
 });
 
-// Initialize with disconnected status
+// Initialize
 updateStatus('disconnected');
+console.log('🟢 Melaleuca Voice Assistant ready - using RealtimeAgent pattern');
